@@ -1,1 +1,0 @@
-# event-voting-site.github.io
