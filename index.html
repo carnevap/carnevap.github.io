@@ -6,6 +6,9 @@
 <title>Blue Ribbon — Community Contests</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<!-- Firebase (Firestore) — used as the shared database so this works once hosted outside Claude -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   :root{
     --ink:#141d27;
@@ -265,22 +268,44 @@
 
 <script>
 /* ============================================================
-   STORAGE HELPERS
+   FIREBASE CONFIG — paste your project's config here
+   (Firebase console → Project settings → Your apps → SDK setup)
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+const FIREBASE_CONFIGURED = firebaseConfig.apiKey && firebaseConfig.apiKey !== 'YOUR_API_KEY';
+let db = null;
+if (FIREBASE_CONFIGURED){
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+}
+const COLLECTION = 'blueribbon_data';
+
+/* ============================================================
+   STORAGE HELPERS (Firestore-backed — one doc per key, { value: ... })
    ============================================================ */
 async function sget(key, retries, delayMs){
   retries = retries || 0; delayMs = delayMs || 300;
   for (let attempt=0; attempt<=retries; attempt++){
     try{
-      const r = await window.storage.get(key, true);
-      if (r) return JSON.parse(r.value);
-    }catch(e){ /* key may not exist yet — fall through to retry/return null */ }
+      const doc = await db.collection(COLLECTION).doc(key).get();
+      if (doc.exists) return doc.data().value;
+    }catch(e){ console.error('sget failed', key, e); }
     if (attempt < retries) await new Promise(res=>setTimeout(res, delayMs));
   }
   return null;
 }
 async function sset(key, val){
-  try{ await window.storage.set(key, JSON.stringify(val), true); return true; }
-  catch(e){ console.error('storage set failed', key, e); return false; }
+  try{
+    await db.collection(COLLECTION).doc(key).set({ value: val, updatedAt: Date.now() });
+    return true;
+  }catch(e){ console.error('sset failed', key, e); return false; }
 }
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
@@ -1077,7 +1102,35 @@ async function renderAdminEvent(eventId){
 /* ============================================================
    INIT
    ============================================================ */
-route();
+if (!FIREBASE_CONFIGURED){
+  document.getElementById('app').innerHTML = `
+    <div>
+      ${topNav()}
+      <div class="panel content-pad" style="max-width:560px; margin:40px auto; text-align:left;">
+        <div style="font-size:2rem; text-align:center;">🔧</div>
+        <h2 class="display" style="text-align:center; margin:6px 0 16px;">Almost there</h2>
+        <p class="small-muted">This app needs a free Firebase project to store entries and votes. Open <code class="k">contest-app.html</code> in a text editor and paste your config into the <code class="k">firebaseConfig</code> object near the top of the script.</p>
+        <ol class="small-muted" style="line-height:1.9; padding-left:20px;">
+          <li>Go to <span class="mono">console.firebase.google.com</span> → Create a project (free)</li>
+          <li>Build → Firestore Database → Create database (start in test mode)</li>
+          <li>Project settings → Your apps → Web app (&lt;/&gt;) → copy the config object</li>
+          <li>Paste it into <code class="k">firebaseConfig</code> in this file, save, and reload</li>
+        </ol>
+        <p class="small-muted">Then set Firestore's rules to allow this public app to read/write (Firestore → Rules):</p>
+        <pre class="mono" style="background:rgba(0,0,0,0.35); padding:12px; border-radius:8px; font-size:0.72rem; overflow-x:auto; white-space:pre-wrap;">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}</pre>
+        <p class="small-muted">This keeps the app fully public with no login for voters — matching how it already works. Anyone with your config could technically read/write the database directly, which is normal for a small public tool like this, just worth knowing.</p>
+      </div>
+    </div>`;
+} else {
+  route();
+}
 </script>
 </body>
 </html>
