@@ -267,9 +267,16 @@
 /* ============================================================
    STORAGE HELPERS
    ============================================================ */
-async function sget(key){
-  try{ const r = await window.storage.get(key, true); return r ? JSON.parse(r.value) : null; }
-  catch(e){ return null; }
+async function sget(key, retries, delayMs){
+  retries = retries || 0; delayMs = delayMs || 300;
+  for (let attempt=0; attempt<=retries; attempt++){
+    try{
+      const r = await window.storage.get(key, true);
+      if (r) return JSON.parse(r.value);
+    }catch(e){ /* key may not exist yet — fall through to retry/return null */ }
+    if (attempt < retries) await new Promise(res=>setTimeout(res, delayMs));
+  }
+  return null;
 }
 async function sset(key, val){
   try{ await window.storage.set(key, JSON.stringify(val), true); return true; }
@@ -436,7 +443,7 @@ let carouselState = { index: 0, timer: null };
 
 async function renderEventPage(eventId){
   setApp(`<div>${topNav()}<div class="empty-state">Loading contest…</div></div>`);
-  const ev = await sget('event:' + eventId);
+  const ev = await sget('event:' + eventId, 4, 350);
   if (!ev){
     setApp(`<div>${topNav()}<div class="empty-state"><div class="glyph">🎫</div>Contest not found.<br><a href="#/" class="btn btn-ghost" style="margin-top:14px;">Back home</a></div></div>`);
     return;
@@ -727,7 +734,7 @@ async function renderAdmin(){
     </div>`);
     const cfg = await sget('admin-config');
     if (!cfg){
-      document.getElementById('login-hint').innerHTML = ``;
+      document.getElementById('login-hint').innerHTML = `First time here? Default password is <code class="k">blueribbon</code> — change it after logging in.`;
     }
     document.getElementById('login-form').addEventListener('submit', async (e)=>{
       e.preventDefault();
@@ -859,12 +866,25 @@ function openNewEventModal(){
       }
     };
     const full = { ...meta, entryIds: [] };
-    await sset('event:'+id, full);
+    const submitBtn = overlay.querySelector('button[type=submit]');
+    submitBtn.disabled = true; submitBtn.textContent = 'Creating…';
+    const ok = await sset('event:'+id, full);
+    if (!ok){
+      toast('Could not create contest — check your connection and try again', true);
+      submitBtn.disabled = false; submitBtn.textContent = 'Create Contest';
+      return;
+    }
     const index = (await sget('events-index')) || [];
     index.push({ id, name: meta.name, tagline: meta.tagline, coverEmoji: meta.coverEmoji, createdAt: meta.createdAt, status: 'active', settings: meta.settings });
     await sset('events-index', index);
+    // confirm the write is actually readable before navigating away
+    const confirmed = await sget('event:'+id, 4, 300);
     overlay.remove();
-    toast('Contest created 🎉');
+    if (!confirmed){
+      toast('Contest saved, but is taking a moment to sync — opening it now', false);
+    } else {
+      toast('Contest created 🎉');
+    }
     location.hash = '#/admin/event/'+id;
   });
 }
@@ -902,7 +922,7 @@ let adminEventTab = 'entries';
 async function renderAdminEvent(eventId){
   if (!App.adminAuthed){ location.hash = '#/admin'; return; }
   setApp(`<div>${topNav('admin')}<div class="empty-state">Loading…</div></div>`);
-  const ev = await sget('event:'+eventId);
+  const ev = await sget('event:'+eventId, 4, 350);
   if (!ev){
     setApp(`<div>${topNav('admin')}<div class="empty-state">Event not found. <a href="#/admin" class="btn btn-ghost" style="margin-top:10px;">Back</a></div></div>`);
     return;
